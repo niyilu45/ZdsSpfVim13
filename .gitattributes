@@ -1,0 +1,3 @@
+# Preserve every packaged file byte-for-byte so manifest.sha256 remains valid
+# after cloning on Windows, regardless of the user's core.autocrlf setting.
+* -text
