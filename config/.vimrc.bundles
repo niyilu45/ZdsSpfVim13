@@ -186,10 +186,23 @@
             Bundle 'Shougo/neosnippet-snippets'
             Bundle 'honza/vim-snippets'
         elseif count(g:spf13_bundle_groups, 'neocomplete')
-            Bundle 'Shougo/neocomplete.vim.git'
-            Bundle 'Shougo/neosnippet'
-            Bundle 'Shougo/neosnippet-snippets'
-            Bundle 'honza/vim-snippets'
+            if v:version < 704
+                " neosnippet requires Vim 7.4 or newer.  Keep a usable native
+                " completion setup if an older Vim is launched manually.
+                let g:spf13_legacy_neocomplete_disabled = 1
+                let g:spf13_snippets_disabled = 1
+            else
+                if has('patch-8.2.1066')
+                    " The bundled neocomplete predates Vim 8.2.1066.  Retain
+                    " snippets, but use Vim's native omni-completion instead.
+                    let g:spf13_legacy_neocomplete_disabled = 1
+                else
+                    Bundle 'Shougo/neocomplete.vim.git'
+                endif
+                Bundle 'Shougo/neosnippet'
+                Bundle 'Shougo/neosnippet-snippets'
+                Bundle 'honza/vim-snippets'
+            endif
         endif
     " }
 

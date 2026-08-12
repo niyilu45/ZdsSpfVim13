@@ -11,11 +11,22 @@ endif
 " it by default; pass -SkipCapsCtrl to install.ps1 to disable it.
 if (has('win32') || has('win64') || has('win32unix')) && !get(g:, 'spf13_disable_caps_ctrl', 0)
     let g:spf13_caps_ctrl_active = 0
-    let s:spf13_caps_ctrl_helper = expand('$LOCALAPPDATA/Programs/spf13-vim/tools/capsctrl.exe')
+    " MSYS/Git Bash Vim receives LOCALAPPDATA with Windows backslashes.  Its
+    " expand() treats those as escapes, so normalize the directory first.
+    let s:spf13_caps_ctrl_helper = substitute($LOCALAPPDATA, '\\', '/', 'g') . '/Programs/spf13-vim/tools/capsctrl.exe'
     if executable(s:spf13_caps_ctrl_helper) && exists('*job_start') && exists('*getpid')
         if !exists('g:spf13_caps_ctrl_job') || job_status(g:spf13_caps_ctrl_job) ==# 'dead'
-            let g:spf13_caps_ctrl_job = job_start([s:spf13_caps_ctrl_helper, string(getpid())], {'stoponexit': 'term'})
+            " The helper already watches the Vim PID and exits with it.  Avoid
+            " stoponexit here: MSYS Vim 8.2 can emit a spurious E684 while
+            " shutting down a native Windows helper through that option.
+            let g:spf13_caps_ctrl_job = job_start([s:spf13_caps_ctrl_helper, string(getpid())], {})
         endif
         let g:spf13_caps_ctrl_active = job_status(g:spf13_caps_ctrl_job) ==# 'run'
+        " Old job implementations can leave an E684 diagnostic in v:errmsg
+        " even though the helper started correctly.  Do not make a successful
+        " Vim startup look like a configuration failure.
+        if g:spf13_caps_ctrl_active && v:errmsg =~# '^E684:'
+            let v:errmsg = ''
+        endif
     endif
 endif

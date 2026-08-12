@@ -30,15 +30,78 @@ function Get-ExistingItem {
     return Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
 }
 
-function Find-Vim {
-    param([string]$BundledInstallPath)
+function Get-VimCapability {
+    param([Parameter(Mandatory = $true)][string]$Path)
 
-    $command = Get-Command vim.exe -ErrorAction SilentlyContinue
-    if ($null -ne $command) {
-        return $command.Source
+    $statePath = Join-Path ([System.IO.Path]::GetTempPath()) ("spf13-vim-probe-{0}.state" -f [guid]::NewGuid().ToString("N"))
+    $statePathForVim = $statePath.Replace("'", "''").Replace("\", "/")
+    $probeCommand = "call writefile([string(v:version), string(has('multi_byte')), string(exists('*job_start')), string(exists('*getpid')), string(has('patch-8.2.1066')), string(has('win32unix'))], '$statePathForVim')"
+    $previousErrorActionPreference = $ErrorActionPreference
+    $probeOutput = @()
+    $probeExitCode = -1
+
+    try {
+        $ErrorActionPreference = "Continue"
+        $probeOutput = @(& $Path "-Nu" "NONE" "-n" "-N" "-es" "-i" "NONE" "-c" $probeCommand "-c" "qa!" 2>&1)
+        $probeExitCode = $LASTEXITCODE
+    }
+    catch {
+        $probeOutput = @($_.Exception.Message)
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
     }
 
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+        return [PSCustomObject]@{
+            Path = $Path
+            Usable = $false
+            Diagnostic = ((@($probeOutput | ForEach-Object { $_.ToString() }) -join " | ").Trim())
+        }
+    }
+
+    try {
+        $values = @(Get-Content -LiteralPath $statePath -Encoding UTF8)
+    }
+    finally {
+        Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($values.Count -lt 6) {
+        return [PSCustomObject]@{
+            Path = $Path
+            Usable = $false
+            Diagnostic = "Vim returned an incomplete capability report (exit code $probeExitCode)."
+        }
+    }
+
+    return [PSCustomObject]@{
+        Path = $Path
+        Usable = $true
+        Version = [int]([string]$values[0]).Trim()
+        MultiByte = ([int]([string]$values[1]).Trim()) -eq 1
+        JobStart = ([int]([string]$values[2]).Trim()) -eq 1
+        GetPid = ([int]([string]$values[3]).Trim()) -eq 1
+        NewVimCompletionFallback = ([int]([string]$values[4]).Trim()) -eq 1
+        Win32Unix = ([int]([string]$values[5]).Trim()) -eq 1
+        ExitCode = $probeExitCode
+    }
+}
+
+function Find-Vim {
+    param(
+        [string]$BundledInstallPath,
+        [bool]$RequireCapsCtrl
+    )
+
     $candidates = New-Object System.Collections.Generic.List[string]
+    $commands = @(Get-Command vim.exe -All -ErrorAction SilentlyContinue)
+    foreach ($command in $commands) {
+        if (-not [string]::IsNullOrWhiteSpace($command.Source)) {
+            $candidates.Add($command.Source)
+        }
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($BundledInstallPath)) {
         $candidates.Add((Join-Path $BundledInstallPath "vim.exe"))
     }
@@ -56,10 +119,49 @@ function Find-Vim {
         }
     }
 
+    $seen = @{}
     foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-            return $candidate
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            continue
         }
+
+        $fullPath = [System.IO.Path]::GetFullPath($candidate)
+        $candidateKey = $fullPath.ToUpperInvariant()
+        if ($seen.ContainsKey($candidateKey)) {
+            continue
+        }
+        $seen[$candidateKey] = $true
+
+        $capability = Get-VimCapability -Path $fullPath
+        if (-not $capability.Usable) {
+            $diagnostic = if ([string]::IsNullOrWhiteSpace($capability.Diagnostic)) { "no diagnostic output" } else { $capability.Diagnostic }
+            Write-Warning "Skipped Vim candidate (could not inspect): $fullPath -- $diagnostic"
+            continue
+        }
+
+        $majorVersion = [int][Math]::Floor($capability.Version / 100)
+        $minorVersion = $capability.Version % 100
+        $features = @(
+            $(if ($capability.MultiByte) { "+multi_byte" } else { "-multi_byte" }),
+            $(if ($capability.JobStart) { "+job" } else { "-job" })
+        ) -join ", "
+        $reasons = New-Object System.Collections.Generic.List[string]
+        if ($capability.Version -lt 704) {
+            $reasons.Add("Vim 7.4 or newer is required by neosnippet")
+        }
+        if (-not $capability.MultiByte) {
+            $reasons.Add("multi-byte/UTF-8 support is missing")
+        }
+        if ($RequireCapsCtrl -and ((-not $capability.JobStart) -or (-not $capability.GetPid))) {
+            $reasons.Add("the default Caps-to-Ctrl helper requires +job and getpid()")
+        }
+
+        if ($reasons.Count -eq 0) {
+            Write-Host "Selected Vim $majorVersion.$minorVersion ($features): $fullPath"
+            return $capability
+        }
+
+        Write-Warning "Skipped incompatible Vim $majorVersion.$minorVersion ($features): $fullPath -- $($reasons -join '; ')"
     }
 
     return $null
@@ -226,8 +328,9 @@ else {
 
 $runtimeTarget = Join-Path $localAppData "Programs\spf13-vim\vim81"
 $capsCtrlTarget = Join-Path $localAppData "Programs\spf13-vim\tools\capsctrl.exe"
-$vimExe = Find-Vim -BundledInstallPath $runtimeTarget
-$installBundledVim = $null -eq $vimExe
+$vimCapability = Find-Vim -BundledInstallPath $runtimeTarget -RequireCapsCtrl (-not [bool]$SkipCapsCtrl)
+$installBundledVim = $null -eq $vimCapability
+$vimExe = if ($installBundledVim) { $null } else { $vimCapability.Path }
 
 $pluginTarget = Join-Path $TargetProfile ".vim"
 $targetPaths = @(
@@ -379,13 +482,14 @@ try {
 
     $runtimeStage = $vimSource
     if ($installBundledVim) {
-        Write-Host "No existing Vim installation was found; the bundled Vim runtime will be installed."
+        Write-Host "No compatible existing Vim was found; the bundled Vim runtime will be installed."
     }
 
     $oldUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $pathParts = @([string]$oldUserPath -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    $runtimeAlreadyInPath = $null -ne ($pathParts | Where-Object { $_.TrimEnd("\") -ieq $runtimeTarget.TrimEnd("\") } | Select-Object -First 1)
-    $willChangePath = $installBundledVim -and $isCurrentUserProfile -and (-not $SkipPathUpdate) -and (-not $runtimeAlreadyInPath)
+    $pathWithoutRuntime = @($pathParts | Where-Object { $_.TrimEnd("\") -ine $runtimeTarget.TrimEnd("\") })
+    $runtimeIsFirstInPath = $pathParts.Count -gt 0 -and $pathParts[0].TrimEnd("\") -ieq $runtimeTarget.TrimEnd("\")
+    $willChangePath = $installBundledVim -and $isCurrentUserProfile -and (-not $SkipPathUpdate) -and (-not $runtimeIsFirstInPath)
 
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $backupRoot = Join-Path $TargetProfile "spf13-vim-backups\$timestamp-$PID"
@@ -442,12 +546,15 @@ try {
     if ($installBundledVim) {
         $vimExe = Join-Path $runtimeTarget "vim.exe"
         if ($willChangePath) {
-            $newUserPath = (($pathParts + $runtimeTarget) -join ";")
+            $newUserPath = ((@($runtimeTarget) + $pathWithoutRuntime) -join ";")
             [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
             $pathChanged = $true
-            $env:Path = $env:Path + ";" + $runtimeTarget
+            $currentPathWithoutRuntime = @([string]$env:Path -split ";" | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_) -and $_.TrimEnd("\") -ine $runtimeTarget.TrimEnd("\")
+            })
+            $env:Path = ((@($runtimeTarget) + $currentPathWithoutRuntime) -join ";")
             [System.IO.File]::WriteAllText((Join-Path $backupRoot "user-path-before.txt"), [string]$oldUserPath)
-            Write-Host "Added bundled Vim to the current user's PATH."
+            Write-Host "Placed bundled Vim first in the current user's PATH."
         }
     }
     else {
@@ -459,6 +566,9 @@ try {
         $mainConfig = Join-Path $TargetProfile "_vimrc"
         $validationState = Join-Path $transactionRoot "vim-validation.state"
         $validationStateForVim = $validationState.Replace("'", "''").Replace("\", "/")
+        # Some plugins and old job implementations leave harmless text in
+        # v:errmsg even when startup, encoding and the Caps helper all work.
+        # Capture it for the on-screen report, but validate concrete state.
         $validationCommand = "call writefile([&encoding, &termencoding, &fileencodings, &listchars, 'ERR=' . v:errmsg, string(get(g:, 'spf13_caps_ctrl_active', 0))], '$validationStateForVim')"
         $previousErrorActionPreference = $ErrorActionPreference
         $previousHome = $env:HOME
@@ -496,12 +606,19 @@ try {
         $validationDiagnostics = ($validationOutput | ForEach-Object { [string]$_ }) -join "`n"
         $hasForbiddenStartupDiagnostic = $validationDiagnostics -match "(?i)not a git repository|(^|\W)uname(\W|$)"
         $expectedCapsCtrlState = if ($SkipCapsCtrl) { "0" } else { "1" }
+        $reportedVimError = if ($validationValues.Count -ge 5) { [string]$validationValues[4] } else { "<missing>" }
+        $hasOnlyKnownMsSysJobDiagnostic = $vimCapability.Win32Unix -and
+            $expectedCapsCtrlState -eq "1" -and
+            $validationValues.Count -ge 6 -and
+            $validationValues[5] -eq "1" -and
+            $reportedVimError -eq "ERR=E684: list index out of range: 0"
+        $vimErrorIsValid = $reportedVimError -eq "ERR=" -or $hasOnlyKnownMsSysJobDiagnostic
         $encodingIsValid = $validationValues.Count -ge 6 -and
             $validationValues[0] -eq "utf-8" -and
             $validationValues[1] -eq "" -and
             @($validationValues[2].Split(",")) -contains "gb18030" -and
             $validationValues[3] -eq "tab:>-,trail:.,extends:>,precedes:<,nbsp:+" -and
-            $validationValues[4] -eq "ERR=" -and
+            $vimErrorIsValid -and
             $validationValues[5] -eq $expectedCapsCtrlState -and
             -not $hasForbiddenStartupDiagnostic
 

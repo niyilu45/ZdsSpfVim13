@@ -24,8 +24,9 @@ Caps Lock→左 Ctrl 是包内可选功能，并且默认安装。若不需要�
 - 将插件部署到 `%USERPROFILE%\.vim`。
 - 默认安装一个很小的 Caps→Ctrl 助手；它只接受 `vim.exe`/`gvim.exe`，并随对应 Vim 退出。
 - 在 ConEmu 中运行 `vim.exe` 时，映射只在启动 Vim 的 ConEmu 窗口位于前台时生效；切走后立即恢复 Caps Lock。
-- 如果电脑已有 Vim，就继续使用已有 Vim。
-- 如果没有检测到 Vim，就把随包附带的 Vim 安装到：
+- 安装器会实际检查找到的每一个 `vim.exe`，并在屏幕上打印版本、功能以及选择或跳过的原因；不会因为 PATH 中较旧的 Vim 7.3 排在前面而误用它。
+- Vim 7.4 或更高版本、UTF-8/多字节支持是必需条件；默认 Caps→Ctrl 功能还需要 Vim 的任务支持。Vim 8.2.1066 或更高版本会自动避开不兼容的旧 `neocomplete`，改用 Vim 原生补全，同时保留 snippets。
+- 如果电脑已有兼容 Vim，就继续使用它；如果没有，就把随包附带的 Vim 安装到：
   `%LOCALAPPDATA%\Programs\spf13-vim\vim81`
 - 安装附带 Vim 时，会把该目录加入当前用户的 PATH。
 - 部署完成后执行一次静默启动检查。
@@ -80,6 +81,6 @@ Caps Lock→左 Ctrl 是包内可选功能，并且默认安装。若不需要�
 ## 注意事项
 
 - 这是当前环境的离线快照，插件不会在安装时访问网络。
-- 包内 Vim 为当前电脑使用的 Vim 8.1 32 位版本。目标电脑已有较新 Vim 时，安装程序不会覆盖它。
+- 包内 Vim 为当前电脑使用的 Vim 8.1 32 位版本。目标电脑已有兼容的较新 Vim 时，安装程序不会覆盖它；存在不兼容的旧 Vim 时，包内 Vim 会被放到用户 PATH 最前面。
 - 不要修改或删除 `payload.zip`、`manifest.sha256`、`install.ps1`。
 - Caps→Ctrl 不修改注册表或全局键盘映射；支持 Windows 10/11、gVim 以及 ConEmu 中的 Vim，切换到其他应用后 Caps Lock 保持原功能。
