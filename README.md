@@ -36,6 +36,7 @@ Caps Lock→左 Ctrl 是包内可选功能，并且默认安装。若不需要�
 - Vim 内部和新建文件统一使用 UTF-8。
 - 打开已有文件时会自动识别 UTF-8、带 BOM 的 UTF-16、GB18030、GBK/CP936 和 Big5。
 - 不再把 Windows 终端编码固定为西欧 `cp850`，可适配中文或英文版 Windows 10/11、Windows Terminal、Git Bash 和传统控制台。
+- 原生 Windows Vim 在 ConEmu 中启动时会临时把控制台切换为 UTF-8（65001），退出 Vim 时自动恢复此前的代码页，避免影响同一窗口中的其他程序。
 - 空白符和状态栏使用 ASCII 字符，避免部分字体或 `ambiwidth=double` 环境触发 `E474: Invalid argument: listchars`。
 - gVim 会从新宋体、宋体、微软雅黑中选择目标电脑可用的中文字体。
 - Windows/ConEmu 启动 Vim 时，不再因当前目录不是 Git 仓库显示 `not a git repository`，也不会调用 Windows 不提供的 `uname`。

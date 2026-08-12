@@ -21,6 +21,35 @@
 
 " spf13 options {
 
+    " Native Windows Vim writes its UTF-8 screen through the active console
+    " code page.  ConEmu may keep a Chinese OEM page such as 936, which turns
+    " UTF-8 bytes into mojibake even though the file and &encoding are correct.
+    " Use UTF-8 only while Vim owns the console, then restore the shell's page.
+    if (has('win32') || has('win64')) &&
+                \ (exists('$ConEmuBuild') || exists('$ConEmuHWND') || exists('$ConEmuDir'))
+        let s:spf13_conemu_code_page_output = system('chcp')
+        let g:spf13_conemu_original_code_page = matchstr(
+                    \ s:spf13_conemu_code_page_output, '\d\+\ze\D*$')
+        if g:spf13_conemu_original_code_page =~# '^\d\+$' &&
+                    \ g:spf13_conemu_original_code_page !=# '65001'
+            silent! call system('chcp 65001 > nul')
+            let $ConEmuDefaultCp = '65001'
+
+            function! s:Spf13RestoreConEmuCodePage()
+                if exists('g:spf13_conemu_original_code_page') &&
+                            \ g:spf13_conemu_original_code_page =~# '^\d\+$'
+                    silent! call system('chcp ' .
+                                \ g:spf13_conemu_original_code_page . ' > nul')
+                endif
+            endfunction
+
+            augroup spf13_conemu_utf8
+                autocmd!
+                autocmd VimLeavePre * call <SID>Spf13RestoreConEmuCodePage()
+            augroup END
+        endif
+    endif
+
     " vim-preview 0.7 performs Unix-only browser detection with `uname` as
     " soon as it loads. It is not usable on native Windows Vim, so skip it
     " there while leaving it available in Unix-like Vim builds.
