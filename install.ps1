@@ -545,6 +545,11 @@ try {
 
     if ($installBundledVim) {
         $vimExe = Join-Path $runtimeTarget "vim.exe"
+        $vimCapability = Get-VimCapability -Path $vimExe
+        if (-not $vimCapability.Usable) {
+            $diagnostic = if ([string]::IsNullOrWhiteSpace($vimCapability.Diagnostic)) { "no diagnostic output" } else { $vimCapability.Diagnostic }
+            throw "The bundled Vim runtime was installed but could not be inspected: $vimExe -- $diagnostic"
+        }
         if ($willChangePath) {
             $newUserPath = ((@($runtimeTarget) + $pathWithoutRuntime) -join ";")
             [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
