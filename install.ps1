@@ -3,7 +3,8 @@ param(
     [string]$TargetProfile = $env:USERPROFILE,
     [switch]$SkipIntegrityCheck,
     [switch]$SkipVimValidation,
-    [switch]$SkipPathUpdate
+    [switch]$SkipPathUpdate,
+    [switch]$SkipCapsCtrl
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,25 +28,6 @@ function Get-Sha256 {
 function Get-ExistingItem {
     param([Parameter(Mandatory = $true)][string]$Path)
     return Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-}
-
-function Copy-DirectoryWithRobocopy {
-    param(
-        [Parameter(Mandatory = $true)][string]$Source,
-        [Parameter(Mandatory = $true)][string]$Destination
-    )
-
-    $robocopy = Get-Command robocopy.exe -ErrorAction SilentlyContinue
-    if ($null -eq $robocopy) {
-        throw "robocopy.exe is required but was not found."
-    }
-
-    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-    & $robocopy.Source $Source $Destination /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
-    $robocopyCode = $LASTEXITCODE
-    if ($robocopyCode -ge 8) {
-        throw "Failed to copy '$Source' (robocopy exit code $robocopyCode)."
-    }
 }
 
 function Find-Vim {
@@ -219,10 +201,8 @@ function Recover-InterruptedInstall {
 }
 
 $packageRoot = $PSScriptRoot
-$payloadRoot = Join-Path $packageRoot "payload"
-$configRoot = Join-Path $payloadRoot "config"
-$pluginSource = Join-Path $payloadRoot ".vim"
-$vimSource = Join-Path $payloadRoot "vim81"
+$payloadArchive = Join-Path $packageRoot "payload.zip"
+$configRoot = Join-Path $packageRoot "config"
 $manifestPath = Join-Path $packageRoot "manifest.sha256"
 
 if ([string]::IsNullOrWhiteSpace($TargetProfile)) {
@@ -245,6 +225,7 @@ else {
 }
 
 $runtimeTarget = Join-Path $localAppData "Programs\spf13-vim\vim81"
+$capsCtrlTarget = Join-Path $localAppData "Programs\spf13-vim\tools\capsctrl.exe"
 $vimExe = Find-Vim -BundledInstallPath $runtimeTarget
 $installBundledVim = $null -eq $vimExe
 
@@ -256,7 +237,8 @@ $targetPaths = @(
     (Join-Path $TargetProfile ".vimrc.bundles"),
     (Join-Path $TargetProfile ".vimrc.local"),
     $pluginTarget,
-    $runtimeTarget
+    $runtimeTarget,
+    $capsCtrlTarget
 )
 $transactionRoot = Join-Path $TargetProfile ".spf13-vim-install-transaction"
 $stageRoot = Join-Path $transactionRoot "stage"
@@ -288,8 +270,7 @@ try {
         (Join-Path $configRoot ".vimrc.before"),
         (Join-Path $configRoot ".vimrc.bundles"),
         (Join-Path $configRoot ".vimrc.local"),
-        $pluginSource,
-        (Join-Path $vimSource "vim.exe"),
+        $payloadArchive,
         $manifestPath
     )
     foreach ($requiredPath in $requiredPaths) {
@@ -335,9 +316,30 @@ try {
         Write-Host ""
     }
 
+    Write-Host "Extracting the offline payload..."
+    Write-Host "If this is interrupted, run install.bat again to restart safely."
+    New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
+    Expand-Archive -LiteralPath $payloadArchive -DestinationPath $stageRoot -Force
+
+    $payloadRoot = Join-Path $stageRoot "payload"
+    $pluginSource = Join-Path $payloadRoot ".vim"
+    $vimSource = Join-Path $payloadRoot "vim81"
+    $capsCtrlSource = Join-Path $payloadRoot "tools\capsctrl.exe"
+    $requiredPayloadPaths = @(
+        $pluginSource,
+        (Join-Path $vimSource "vim.exe")
+    )
+    if (-not $SkipCapsCtrl) {
+        $requiredPayloadPaths += $capsCtrlSource
+    }
+    foreach ($requiredPayloadPath in $requiredPayloadPaths) {
+        if (-not (Test-Path -LiteralPath $requiredPayloadPath)) {
+            throw "The payload archive is incomplete. Missing after extraction: $requiredPayloadPath"
+        }
+    }
+
     Write-Host "Staging configuration and plugins..."
     Write-Host "The current Vim setup will remain untouched until staging is complete."
-    New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
 
     $fileDeployments = @(
         [PSCustomObject]@{ Source = (Join-Path $configRoot "main.vimrc"); Stage = (Join-Path $stageRoot "_vimrc"); Target = (Join-Path $TargetProfile "_vimrc"); BackupName = "_vimrc" },
@@ -349,14 +351,33 @@ try {
     foreach ($deployment in $fileDeployments) {
         [System.IO.File]::Copy($deployment.Source, $deployment.Stage, $true)
     }
+    if ($SkipCapsCtrl) {
+        $localConfigStage = Join-Path $stageRoot ".vimrc.local"
+        $localConfigContents = [System.IO.File]::ReadAllText($localConfigStage)
+        [System.IO.File]::WriteAllText(
+            $localConfigStage,
+            "let g:spf13_disable_caps_ctrl = 1`n$localConfigContents",
+            (New-Object System.Text.UTF8Encoding($false))
+        )
+        Write-Host "Caps Lock to Ctrl mapping: disabled by option."
+    }
+    else {
+        $capsCtrlStage = Join-Path $stageRoot "capsctrl.exe"
+        [System.IO.File]::Copy($capsCtrlSource, $capsCtrlStage, $true)
+        $fileDeployments += [PSCustomObject]@{
+            Source = $capsCtrlSource
+            Stage = $capsCtrlStage
+            Target = $capsCtrlTarget
+            BackupName = "capsctrl.exe"
+        }
+        Write-Host "Caps Lock to Ctrl mapping: enabled for Vim/gVim only."
+    }
 
-    $pluginStage = Join-Path $stageRoot ".vim"
-    Copy-DirectoryWithRobocopy -Source $pluginSource -Destination $pluginStage
+    $pluginStage = $pluginSource
 
-    $runtimeStage = Join-Path $stageRoot "vim81"
+    $runtimeStage = $vimSource
     if ($installBundledVim) {
-        Write-Host "No existing Vim installation was found; staging the bundled Vim runtime..."
-        Copy-DirectoryWithRobocopy -Source $vimSource -Destination $runtimeStage
+        Write-Host "No existing Vim installation was found; the bundled Vim runtime will be installed."
     }
 
     $oldUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -436,15 +457,17 @@ try {
         $mainConfig = Join-Path $TargetProfile "_vimrc"
         $validationState = Join-Path $transactionRoot "vim-validation.state"
         $validationStateForVim = $validationState.Replace("'", "''").Replace("\", "/")
-        $validationCommand = "call writefile([&encoding, &termencoding, &fileencodings], '$validationStateForVim')"
+        $validationCommand = "call writefile([&encoding, &termencoding, &fileencodings, &listchars, 'ERR=' . v:errmsg, string(get(g:, 'spf13_caps_ctrl_active', 0))], '$validationStateForVim')"
         $previousErrorActionPreference = $ErrorActionPreference
         $previousHome = $env:HOME
+        $previousLocalAppData = $env:LOCALAPPDATA
         try {
             # Some optional plugins write harmless diagnostics to stderr.  The
             # encoding state written by Vim is authoritative; process output is
             # retained only for diagnostics.
             $ErrorActionPreference = "Continue"
             $env:HOME = $TargetProfile
+            $env:LOCALAPPDATA = $localAppData
             $validationOutput = @(& $vimExe "-Nu" $mainConfig "-n" "-N" "-es" "-i" "NONE" "-c" "set nomore" "-c" $validationCommand "-c" "qa!" 2>&1)
             $validationExitCode = $LASTEXITCODE
         }
@@ -455,6 +478,12 @@ try {
             else {
                 $env:HOME = $previousHome
             }
+            if ($null -eq $previousLocalAppData) {
+                Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:LOCALAPPDATA = $previousLocalAppData
+            }
             $ErrorActionPreference = $previousErrorActionPreference
         }
 
@@ -462,16 +491,17 @@ try {
         if (Test-Path -LiteralPath $validationState -PathType Leaf) {
             $validationValues = @(Get-Content -LiteralPath $validationState -Encoding UTF8)
         }
-        $encodingIsValid = $validationValues.Count -ge 3 -and
+        $expectedCapsCtrlState = if ($SkipCapsCtrl) { "0" } else { "1" }
+        $encodingIsValid = $validationValues.Count -ge 6 -and
             $validationValues[0] -eq "utf-8" -and
             $validationValues[1] -eq "" -and
-            @($validationValues[2].Split(",")) -contains "gb18030"
+            @($validationValues[2].Split(",")) -contains "gb18030" -and
+            $validationValues[3] -eq "tab:>-,trail:.,extends:>,precedes:<,nbsp:+" -and
+            $validationValues[4] -eq "ERR=" -and
+            $validationValues[5] -eq $expectedCapsCtrlState
 
         if ($encodingIsValid) {
             Write-Host "Vim startup validation passed."
-            if ($validationExitCode -ne 0 -and $validationOutput.Count -gt 0) {
-                Write-Warning "Some optional plugins reported diagnostics during validation; the required UTF-8 and Chinese encoding settings are active."
-            }
         }
         else {
             $validationLog = Join-Path $backupRoot "vim-validation.log"

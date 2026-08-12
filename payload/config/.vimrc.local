@@ -1,8 +1,0 @@
-color ir_black
-set nospell
-set mouse=
-
-" Chinese glyph fallback for gVim on Windows 10/11.
-if has('gui_running') && (has('win32') || has('win64')) && exists('+guifontwide')
-    silent! set guifontwide=NSimSun:h10,SimSun:h10,Microsoft_YaHei:h10
-endif

@@ -1,0 +1,21 @@
+color ir_black
+set nospell
+set mouse=
+
+" Chinese glyph fallback for gVim on Windows 10/11.
+if has('gui_running') && (has('win32') || has('win64')) && exists('+guifontwide')
+    silent! set guifontwide=NSimSun:h10,SimSun:h10,Microsoft_YaHei:h10
+endif
+
+" Optional Windows-only Caps Lock -> Left Ctrl helper.  The installer enables
+" it by default; pass -SkipCapsCtrl to install.ps1 to disable it.
+if (has('win32') || has('win64') || has('win32unix')) && !get(g:, 'spf13_disable_caps_ctrl', 0)
+    let g:spf13_caps_ctrl_active = 0
+    let s:spf13_caps_ctrl_helper = expand('$LOCALAPPDATA/Programs/spf13-vim/tools/capsctrl.exe')
+    if executable(s:spf13_caps_ctrl_helper) && exists('*job_start') && exists('*getpid')
+        if !exists('g:spf13_caps_ctrl_job') || job_status(g:spf13_caps_ctrl_job) ==# 'dead'
+            let g:spf13_caps_ctrl_job = job_start([s:spf13_caps_ctrl_helper, string(getpid())], {'stoponexit': 'term'})
+        endif
+        let g:spf13_caps_ctrl_active = job_status(g:spf13_caps_ctrl_job) ==# 'run'
+    endif
+endif
