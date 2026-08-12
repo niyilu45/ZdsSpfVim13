@@ -244,6 +244,7 @@ $transactionRoot = Join-Path $TargetProfile ".spf13-vim-install-transaction"
 $stageRoot = Join-Path $transactionRoot "stage"
 $commitJournalPath = Join-Path $transactionRoot "commit.json"
 $completedMarker = Join-Path $transactionRoot "completed.marker"
+$validationLog = Join-Path $TargetProfile "spf13-vim-install-error.log"
 
 $mutexHash = (Get-StringSha256 -Value $TargetProfile.ToUpperInvariant()).Substring(0, 24)
 $mutexName = "Local\spf13-vim-installer-$mutexHash"
@@ -262,6 +263,7 @@ if (-not $mutexAcquired) {
 
 $backupRoot = $null
 $pathChanged = $false
+$validationFailureDetailsPrinted = $false
 try {
     Recover-InterruptedInstall -TransactionRoot $transactionRoot -ExpectedTargetProfile $TargetProfile -AllowedTargets $targetPaths -IsCurrentUserProfile $isCurrentUserProfile
 
@@ -504,14 +506,82 @@ try {
             -not $hasForbiddenStartupDiagnostic
 
         if ($encodingIsValid) {
+            if (Test-Path -LiteralPath $validationLog -PathType Leaf) {
+                Remove-Item -LiteralPath $validationLog -Force -ErrorAction SilentlyContinue
+            }
             Write-Host "Vim startup validation passed."
         }
         else {
-            $validationLog = Join-Path $backupRoot "vim-validation.log"
-            if ($validationOutput.Count -gt 0) {
-                [System.IO.File]::WriteAllLines($validationLog, [string[]]$validationOutput)
+            $validationReport = New-Object System.Collections.Generic.List[string]
+            [void]$validationReport.Add("spf13-vim startup validation failed")
+            [void]$validationReport.Add("Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')")
+            [void]$validationReport.Add("Package: $packageRoot")
+            [void]$validationReport.Add("Target profile: $TargetProfile")
+            [void]$validationReport.Add("Vim executable: $vimExe")
+            [void]$validationReport.Add("Vim exit code: $validationExitCode")
+            [void]$validationReport.Add("Validation state file created: $(Test-Path -LiteralPath $validationState -PathType Leaf)")
+            [void]$validationReport.Add("")
+            [void]$validationReport.Add("Validation values (actual / expected):")
+
+            $validationFields = @(
+                [PSCustomObject]@{ Name = "encoding"; Index = 0; Expected = "utf-8" },
+                [PSCustomObject]@{ Name = "termencoding"; Index = 1; Expected = "<empty>" },
+                [PSCustomObject]@{ Name = "fileencodings"; Index = 2; Expected = "contains gb18030" },
+                [PSCustomObject]@{ Name = "listchars"; Index = 3; Expected = "tab:>-,trail:.,extends:>,precedes:<,nbsp:+" },
+                [PSCustomObject]@{ Name = "Vim error"; Index = 4; Expected = "ERR=" },
+                [PSCustomObject]@{ Name = "Caps-to-Ctrl active"; Index = 5; Expected = $expectedCapsCtrlState }
+            )
+            foreach ($field in $validationFields) {
+                $actualValue = if ($validationValues.Count -gt $field.Index) {
+                    [string]$validationValues[$field.Index]
+                }
+                else {
+                    "<missing>"
+                }
+                if ($field.Name -eq "termencoding" -and $actualValue -eq "") {
+                    $actualValue = "<empty>"
+                }
+                [void]$validationReport.Add("  $($field.Name): $actualValue / $($field.Expected)")
             }
-            throw "Vim startup or encoding validation failed (exit code $validationExitCode). Details: $validationLog"
+
+            [void]$validationReport.Add("")
+            [void]$validationReport.Add("Vim/plugin output:")
+            if ($validationOutput.Count -gt 0) {
+                foreach ($outputLine in $validationOutput) {
+                    [void]$validationReport.Add("  " + [string]$outputLine)
+                }
+            }
+            else {
+                [void]$validationReport.Add("  <no output captured>")
+            }
+
+            $validationFailureDetailsPrinted = $true
+            Write-Host ""
+            Write-Host "================ VIM VALIDATION ERROR ================" -ForegroundColor Red
+            foreach ($reportLine in $validationReport) {
+                Write-Host $reportLine -ForegroundColor Red
+            }
+            Write-Host "======================================================" -ForegroundColor Red
+
+            $validationLogSaved = $false
+            try {
+                [System.IO.File]::WriteAllLines(
+                    $validationLog,
+                    [string[]]$validationReport,
+                    (New-Object System.Text.UTF8Encoding($true))
+                )
+                $validationLogSaved = $true
+                Write-Host "A copy was also saved to: $validationLog" -ForegroundColor Yellow
+            }
+            catch {
+                Write-Warning "The on-screen diagnostics above are complete. The optional log copy could not be saved: $($_.Exception.Message)"
+            }
+
+            $failureMessage = "Vim startup or encoding validation failed. Complete diagnostics were printed above."
+            if ($validationLogSaved) {
+                $failureMessage += " A copy is at: $validationLog"
+            }
+            throw $failureMessage
         }
     }
 
@@ -562,7 +632,7 @@ catch {
     }
     $installMutex.Dispose()
     Write-Host ("ERROR: " + $failure.Exception.Message) -ForegroundColor Red
-    if (-not [string]::IsNullOrWhiteSpace([string]$failure.ScriptStackTrace)) {
+    if (-not $validationFailureDetailsPrinted -and -not [string]::IsNullOrWhiteSpace([string]$failure.ScriptStackTrace)) {
         Write-Host ([string]$failure.ScriptStackTrace) -ForegroundColor DarkGray
     }
     exit 1
