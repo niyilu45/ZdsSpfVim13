@@ -37,24 +37,25 @@
           " Be nice and check for multi_byte even if the config requires
           " multi_byte support most of the time
           if has("multi_byte")
-            " Windows cmd.exe still uses cp850. If Windows ever moved to
-            " Powershell as the primary terminal, this would be utf-8
-            set termencoding=cp850
-            " Let Vim use utf-8 internally, because many scripts require this
+            " Win32 Vim receives Unicode characters directly from Windows.
+            " A fixed Western-European terminal encoding breaks portability on
+            " Chinese and UTF-8 systems, including Windows 10 and Windows 11.
+            set termencoding=
             set encoding=utf-8
             setglobal fileencoding=utf-8
-            " Windows has traditionally used cp1252, so it's probably wise to
-            " fallback into cp1252 instead of eg. iso-8859-15.
-            " Newer Windows files might contain utf-8 or utf-16 LE so we might
-            " want to try them first.
-            set fileencodings=ucs-bom,utf-8,utf-16le,cp1252,iso-8859-15
+
+            " Prefer Unicode, while still recognizing Chinese files created by
+            " older Windows tools whose "ANSI" encoding is GBK/CP936.
+            set fileencodings=ucs-bom,utf-8,gb18030,gbk,cp936,big5,cp1252,iso-8859-15,latin1
           endif
         endif
     " }
 
     " Setup Bundle Support {
         " The next three lines ensure that the ~/.vim/bundle/ system works
-        filetype off
+        if exists('#filetypedetect')
+          filetype off
+        endif
         set rtp+=~/.vim/bundle/vundle
         call vundle#rc()
     " }

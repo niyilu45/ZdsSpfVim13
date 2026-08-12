@@ -434,29 +434,51 @@ try {
     if (-not $SkipVimValidation) {
         Write-Host "Validating Vim startup..."
         $mainConfig = Join-Path $TargetProfile "_vimrc"
+        $validationState = Join-Path $transactionRoot "vim-validation.state"
+        $validationStateForVim = $validationState.Replace("'", "''").Replace("\", "/")
+        $validationCommand = "call writefile([&encoding, &termencoding, &fileencodings], '$validationStateForVim')"
         $previousErrorActionPreference = $ErrorActionPreference
+        $previousHome = $env:HOME
         try {
-            # Some Vim plugins write harmless diagnostics to stderr. Native stderr
-            # must not trigger the installer's rollback; the process exit code is
-            # the authoritative startup result.
+            # Some optional plugins write harmless diagnostics to stderr.  The
+            # encoding state written by Vim is authoritative; process output is
+            # retained only for diagnostics.
             $ErrorActionPreference = "Continue"
-            $validationOutput = @(& $vimExe "-Nu" $mainConfig "-n" "-N" "-es" "-i" "NONE" "-c" "set nomore" "-c" "qa!" 2>&1)
+            $env:HOME = $TargetProfile
+            $validationOutput = @(& $vimExe "-Nu" $mainConfig "-n" "-N" "-es" "-i" "NONE" "-c" "set nomore" "-c" $validationCommand "-c" "qa!" 2>&1)
             $validationExitCode = $LASTEXITCODE
         }
         finally {
+            if ($null -eq $previousHome) {
+                Remove-Item Env:HOME -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:HOME = $previousHome
+            }
             $ErrorActionPreference = $previousErrorActionPreference
         }
 
-        if ($validationExitCode -eq 0) {
+        $validationValues = @()
+        if (Test-Path -LiteralPath $validationState -PathType Leaf) {
+            $validationValues = @(Get-Content -LiteralPath $validationState -Encoding UTF8)
+        }
+        $encodingIsValid = $validationValues.Count -ge 3 -and
+            $validationValues[0] -eq "utf-8" -and
+            $validationValues[1] -eq "" -and
+            @($validationValues[2].Split(",")) -contains "gb18030"
+
+        if ($encodingIsValid) {
             Write-Host "Vim startup validation passed."
+            if ($validationExitCode -ne 0 -and $validationOutput.Count -gt 0) {
+                Write-Warning "Some optional plugins reported diagnostics during validation; the required UTF-8 and Chinese encoding settings are active."
+            }
         }
         else {
-            Write-Warning "Vim returned exit code $validationExitCode during silent validation. The files were deployed, but review the configuration if Vim shows an error when opened."
+            $validationLog = Join-Path $backupRoot "vim-validation.log"
             if ($validationOutput.Count -gt 0) {
-                $validationLog = Join-Path $backupRoot "vim-validation.log"
                 [System.IO.File]::WriteAllLines($validationLog, [string[]]$validationOutput)
-                Write-Host "Validation details: $validationLog"
             }
+            throw "Vim startup or encoding validation failed (exit code $validationExitCode). Details: $validationLog"
         }
     }
 
