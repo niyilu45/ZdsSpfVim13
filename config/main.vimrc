@@ -554,9 +554,16 @@
         set tags=./tags;/,~/.vimtags
 
         " Make tags placed in .git/tags file available in all levels of a repository
-        let gitroot = substitute(system('git rev-parse --show-toplevel'), '[\n\r]', '', 'g')
-        if gitroot != ''
-            let &tags = &tags . ',' . gitroot . '/.git/tags'
+        " Detect the repository from its marker instead of spawning Git. This
+        " also supports worktrees, where .git is a file, and stays silent when
+        " Vim starts outside a repository.
+        let gitmarker = finddir('.git', '.;')
+        if empty(gitmarker)
+            let gitmarker = findfile('.git', '.;')
+        endif
+        if !empty(gitmarker)
+            let gitroot = fnamemodify(gitmarker, ':h')
+            let &tags .= ',' . fnameescape(gitroot . '/.git/tags')
         endif
     " }
 

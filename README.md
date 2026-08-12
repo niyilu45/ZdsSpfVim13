@@ -37,6 +37,7 @@ Caps Lock→左 Ctrl 是包内可选功能，并且默认安装。若不需要�
 - 不再把 Windows 终端编码固定为西欧 `cp850`，可适配中文或英文版 Windows 10/11、Windows Terminal、Git Bash 和传统控制台。
 - 空白符和状态栏使用 ASCII 字符，避免部分字体或 `ambiwidth=double` 环境触发 `E474: Invalid argument: listchars`。
 - gVim 会从新宋体、宋体、微软雅黑中选择目标电脑可用的中文字体。
+- Windows/ConEmu 启动 Vim 时，不再因当前目录不是 Git 仓库显示 `not a git repository`，也不会调用 Windows 不提供的 `uname`。
 
 如果文字显示成方框而不是乱码，表示目标电脑缺少中文字体。请在 Windows“可选功能”中安装中文补充字体，或使用支持中文字体的 Windows Terminal/gVim。
 

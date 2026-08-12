@@ -491,6 +491,8 @@ try {
         if (Test-Path -LiteralPath $validationState -PathType Leaf) {
             $validationValues = @(Get-Content -LiteralPath $validationState -Encoding UTF8)
         }
+        $validationDiagnostics = ($validationOutput | ForEach-Object { [string]$_ }) -join "`n"
+        $hasForbiddenStartupDiagnostic = $validationDiagnostics -match "(?i)not a git repository|(^|\W)uname(\W|$)"
         $expectedCapsCtrlState = if ($SkipCapsCtrl) { "0" } else { "1" }
         $encodingIsValid = $validationValues.Count -ge 6 -and
             $validationValues[0] -eq "utf-8" -and
@@ -498,7 +500,8 @@ try {
             @($validationValues[2].Split(",")) -contains "gb18030" -and
             $validationValues[3] -eq "tab:>-,trail:.,extends:>,precedes:<,nbsp:+" -and
             $validationValues[4] -eq "ERR=" -and
-            $validationValues[5] -eq $expectedCapsCtrlState
+            $validationValues[5] -eq $expectedCapsCtrlState -and
+            -not $hasForbiddenStartupDiagnostic
 
         if ($encodingIsValid) {
             Write-Host "Vim startup validation passed."

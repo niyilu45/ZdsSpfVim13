@@ -21,6 +21,13 @@
 
 " spf13 options {
 
+    " vim-preview 0.7 performs Unix-only browser detection with `uname` as
+    " soon as it loads. It is not usable on native Windows Vim, so skip it
+    " there while leaving it available in Unix-like Vim builds.
+    if has('win32') || has('win64')
+        let loaded_preview = 1
+    endif
+
     " Prevent automatically changing to open file directory
     "   let g:spf13_no_autochdir = 1
 
